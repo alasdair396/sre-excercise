@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation template for creating a task definition"
+Resources:
+  # API Task!
+  APITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - "FARGATE"
+      ExecutionRoleArn: "arn:aws:iam::563292790806:role/ecsTaskExecutionRole"
+      Cpu: 256
+      Memory: 512
+      NetworkMode: "awsvpc"
+      ContainerDefinitions:
+        - Name: "sre-assessment-API"
+          Image: "563292790806.dkr.ecr.us-east-1.amazonaws.com/cptodoapi:latest"
+          MemoryReservation: 256
+          Memory: 512
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+  #UI Task!
+  UITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - "FARGATE"
+      ExecutionRoleArn: "arn:aws:iam::563292790806:role/ecsTaskExecutionRole"
+      Cpu: 256
+      Memory: 512
+      NetworkMode: "awsvpc"
+      ContainerDefinitions:
+        - Name: "sre-assessment-UI"
+          Image: "563292790806.dkr.ecr.us-east-1.amazonaws.com/cptodoui:latest"
+          MemoryReservation: 256
+          Memory: 512
+          PortMappings:
+            - ContainerPort: 3002
+              Protocol: tcp
+
+  #Cluster Definition !        
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: sre-assessment-cluster
+  
+  #Automatic Load Balancer
+  FargateAlb:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: FargateAlb
+      Subnets:
+        - subnet-044a62b5f90f294ca
+        - subnet-08c53f4c79bd116db
+        - subnet-0b701520370b4500c
+      Type: application
+      SecurityGroups:
+        - !GetAtt FargateAlbSG.GroupId
+  # TargetGroup !      
+  MyFargateTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: MyFargateTargetGroup
+      VpcId: vpc-010468a0bca907ab1
+      Protocol: HTTP
+      Port: 3000
+      HealthCheckPath: /actuator/
+      TargetType: ip
+  #Listener !
+  Listener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref MyFargateTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref FargateAlb
+      Port: 3000
+      Protocol: HTTP
+  
+  #Security Group !
+  FargateAlbSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: SG for the Fargate ALB
+      GroupName: FargateAlbSG
+      SecurityGroupIngress:
+        - CidrIpv6: ::/0
+          FromPort: 3000
+          ToPort: 3000
+          IpProtocol: TCP
+          Description: 'Inbound rule for IPv6 traffic'
+        - CidrIp: 0.0.0.0/0
+          FromPort: 3000
+          ToPort: 3000
+          IpProtocol: TCP
+          Description: 'Inbound rule for IPv4 traffic'
+
+  # SG for Alb2 Fargate Containers!
+  Alb2FargateContainers:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: SG for traffic between ALB and containers
+      GroupName: Alb2FargateContainers
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          SourceSecurityGroupId: !GetAtt FargateAlbSG.GroupId
+          Description: 'Inbound rule for all traffic'
+
+  # Define Service
+  SreAssessmentService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Listener
+    Properties:
+      LaunchType: FARGATE
+      Cluster:
+        Ref: "ECSCluster"
+      DesiredCount: 4
+      TaskDefinition:
+        Ref: "APITaskDefinition"
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !GetAtt Alb2FargateContainers.GroupId
+          Subnets: ['subnet-044a62b5f90f294ca','subnet-08c53f4c79bd116db','subnet-0b701520370b4500c']
+      LoadBalancers:
+        - TargetGroupArn:
+            Ref: MyFargateTargetGroup
+          ContainerPort: 3000
+          ContainerName: sre-assessment-API
+
+
+# aws cloudformation create-stack --stack-name sre-assessment5 --template-body file://templates/sre-assessment.yaml            
+
